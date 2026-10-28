@@ -6,6 +6,8 @@ a fresh Unreleased section. Released versions are listed newest first.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-28
+
 - Add `locum`, an OpenAI-compatible HTTP server on `127.0.0.1:11435/v1` that answers
   requests through a locally installed Codex CLI, Claude Code or OpenCode, using your
   existing subscription instead of API keys.
