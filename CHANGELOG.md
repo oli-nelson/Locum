@@ -17,8 +17,8 @@ a fresh Unreleased section. Released versions are listed newest first.
 - Select harness, model and reasoning effort through the `model` string
   (e.g. `codex/gpt-6-luna#high`), with a configurable default and model aliases.
 - Run each turn as a plain chat in an empty temporary directory with tools, MCP,
-  hooks and session persistence disabled. Bind to loopback by default; non-loopback
-  binds require bearer keys.
+  hooks and session persistence disabled. A client disconnect interrupts the harness
+  turn. Bind to loopback by default; non-loopback binds require bearer keys.
 - Add `locum doctor [--live]`, `locum models` and `locum config print|path` commands.
 - Add user documentation for configuration, client setup, harness details, the API
   and troubleshooting, plus an interactive tuios demo.

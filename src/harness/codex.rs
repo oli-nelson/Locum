@@ -187,11 +187,25 @@ impl AppServer {
                 if let Some(tid) = thread_id {
                     let sub = self.subs.lock().get(tid).cloned();
                     if let Some(tx) = sub {
-                        if tx
-                            .try_send(json!({ "method": method, "params": params }))
-                            .is_err()
-                        {
-                            tracing::warn!(tid, "codex notification channel full; dropping event");
+                        match tx.try_send(json!({ "method": method, "params": params })) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                tracing::warn!(
+                                    tid,
+                                    "codex notification channel full; dropping event"
+                                );
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                // The turn's stream is gone; stop routing to it.
+                                let mut subs = self.subs.lock();
+                                if subs.get(tid).is_some_and(|t| t.same_channel(&tx)) {
+                                    subs.remove(tid);
+                                }
+                                tracing::debug!(
+                                    tid,
+                                    "codex notification for a finished turn; unsubscribed"
+                                );
+                            }
                         }
                     }
                 } else if method == "error" {
@@ -310,6 +324,34 @@ fn isolated_codex_home() -> Result<PathBuf, HarnessError> {
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
+
+/// Interrupts and unsubscribes an app-server turn whose stream is dropped before the
+/// turn finishes, so codex stops generating and its notifications stop being routed.
+struct ActiveTurn {
+    server: Arc<AppServer>,
+    thread_id: String,
+    turn_id: String,
+    finished: bool,
+}
+
+impl Drop for ActiveTurn {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.server.unsubscribe(&self.thread_id);
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let server = self.server.clone();
+        let params = json!({ "threadId": self.thread_id, "turnId": self.turn_id });
+        rt.spawn(async move {
+            let _ = server
+                .request("turn/interrupt", params, Duration::from_secs(5))
+                .await;
+        });
+    }
+}
 
 pub struct CodexHarness {
     cfg: CodexConfig,
@@ -438,6 +480,7 @@ impl CodexHarness {
         let s = stream! {
             let _scratch = scratch_keep;
             let _lease = lease;
+            let mut active = ActiveTurn { server: server.clone(), thread_id: tid.clone(), turn_id: turn_id.clone(), finished: false };
             let server = server;
             yield Event::Continuation(tid.clone());
             let mut rec = Reconciler::default();
@@ -446,6 +489,7 @@ impl CodexHarness {
             loop {
                 let msg = tokio::select! {
                     _ = cancel.cancelled() => {
+                        active.finished = true;
                         let _ = server.request("turn/interrupt", json!({ "threadId": tid, "turnId": turn_id }), Duration::from_secs(5)).await;
                         server.unsubscribe(&tid);
                         yield Event::Done(FinishReason::Interrupted);
@@ -454,6 +498,7 @@ impl CodexHarness {
                     m = rx.recv() => m,
                 };
                 let Some(msg) = msg else {
+                    active.finished = true;
                     server.unsubscribe(&tid);
                     yield Event::Error(HarnessError::unavailable("codex app-server connection closed mid-turn"));
                     return;
@@ -518,6 +563,7 @@ impl CodexHarness {
                     }
                     "turn/completed" => {
                         let status = p.pointer("/turn/status").and_then(Value::as_str).unwrap_or("completed");
+                        active.finished = true;
                         server.unsubscribe(&tid);
                         if let Some(u) = usage.take() { yield Event::Usage(u); }
                         match status {
@@ -543,6 +589,7 @@ impl CodexHarness {
                             .unwrap_or("codex error").to_string();
                         let will_retry = p.get("willRetry").and_then(Value::as_bool).unwrap_or(false);
                         if will_retry { tracing::debug!(msg, "codex transient error (retrying)"); continue; }
+                        active.finished = true;
                         server.unsubscribe(&tid);
                         yield Event::Error(HarnessError::new(classify_message(&msg), msg));
                         return;

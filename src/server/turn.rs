@@ -152,6 +152,7 @@ pub async fn start(
     let request_id = inp.request_id.clone();
     let prompt_chars = inp.prompt_chars;
     let scratch = inp.scratch.clone();
+    let client_cancel = cancel.clone();
 
     let out = stream! {
         let _permit = permit;
@@ -323,9 +324,40 @@ pub async fn start(
     };
 
     Ok(Started {
-        stream: Box::pin(out),
+        stream: detach(out, client_cancel),
         harness: kind,
     })
+}
+
+/// Drive the turn on its own task so a client disconnect cancels the harness turn
+/// instead of dropping it mid-await. The task keeps polling after cancellation, so
+/// harness cleanup (interrupt, unsubscribe, reaping) and the final log line still run.
+fn detach(
+    out: impl Stream<Item = OutEvent> + Send + 'static,
+    cancel: CancellationToken,
+) -> OutStream {
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    tokio::spawn(async move {
+        let mut out = std::pin::pin!(out);
+        let mut client_gone = false;
+        loop {
+            tokio::select! {
+                biased;
+                _ = tx.closed(), if !client_gone => {
+                    client_gone = true;
+                    cancel.cancel();
+                }
+                ev = out.next() => {
+                    let Some(ev) = ev else { break };
+                    if !client_gone && tx.send(ev).await.is_err() {
+                        client_gone = true;
+                        cancel.cancel();
+                    }
+                }
+            }
+        }
+    });
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
 fn floor_char(s: &str, mut idx: usize) -> usize {

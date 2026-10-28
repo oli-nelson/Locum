@@ -4,9 +4,13 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use locum::config::Config;
-use locum::harness::{fake::FakeHarness, Registry};
+use locum::harness::{
+    fake::FakeHarness, Event, EventStream, FinishReason, Harness, HarnessError, HarnessInfo,
+    HarnessKind, ModelInfo, Registry, Turn,
+};
 use locum::server::{router, AppState};
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
 async fn spawn_server(mut cfg: Config) -> String {
     cfg.models.default = "fake".into();
@@ -401,4 +405,79 @@ async fn client_disconnect_cancels_turn() {
         .await
         .unwrap();
     assert_eq!(v["inflight_available"], 8);
+}
+
+/// Streams until cancelled, then records that its cleanup path actually ran.
+struct CancelProbe(Arc<tokio::sync::Notify>);
+
+#[async_trait::async_trait]
+impl Harness for CancelProbe {
+    fn kind(&self) -> HarnessKind {
+        HarnessKind::Fake
+    }
+
+    async fn probe(&self) -> Result<HarnessInfo, HarnessError> {
+        FakeHarness.probe().await
+    }
+
+    async fn list_models(&self) -> Result<Vec<ModelInfo>, HarnessError> {
+        FakeHarness.list_models().await
+    }
+
+    async fn run(
+        &self,
+        _turn: Turn,
+        cancel: CancellationToken,
+    ) -> Result<EventStream, HarnessError> {
+        let cleaned_up = self.0.clone();
+        Ok(Box::pin(async_stream::stream! {
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        // Real harnesses await an interrupt request here.
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        cleaned_up.notify_one();
+                        yield Event::Done(FinishReason::Interrupted);
+                        return;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {
+                        yield Event::TextDelta("word ".into());
+                    }
+                }
+            }
+        }))
+    }
+}
+
+#[tokio::test]
+async fn client_disconnect_runs_harness_cancel_path() {
+    let cleaned_up = Arc::new(tokio::sync::Notify::new());
+    let mut cfg = Config::default();
+    cfg.models.default = "fake".into();
+    cfg.models.discover = false;
+    cfg.limits.micro_batch = std::time::Duration::from_millis(0);
+    let registry = Arc::new(Registry::with(vec![Arc::new(CancelProbe(
+        cleaned_up.clone(),
+    ))]));
+    let app = router(AppState::new(Arc::new(cfg), registry));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    for stream in [true, false] {
+        let request = client()
+            .post(format!("{base}/v1/chat/completions"))
+            .json(&json!({ "model": "fake", "stream": stream, "messages": [{ "role": "user", "content": "hi" }] }));
+        if stream {
+            let mut body = request.send().await.unwrap().bytes_stream();
+            let _ = body.next().await;
+        } else {
+            // Abandon a non-streaming request while the turn is still running.
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_millis(200), request.send()).await;
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), cleaned_up.notified())
+            .await
+            .unwrap_or_else(|_| panic!("harness cancel path did not run (stream={stream})"));
+    }
 }
