@@ -2,6 +2,8 @@
 
 **An OpenAI-compatible API served by the agent CLIs you're already signed into.**
 
+https://github.com/user-attachments/assets/48c18c95-7ac1-4d82-8311-e3bd5283264b
+
 `locum` is a small, fast Rust server that speaks the OpenAI chat API on `http://127.0.0.1:11435/v1`
 and answers each request by driving a locally installed agent harness as a child process:
 **Codex CLI**, **Claude Code** or **OpenCode**. No API keys to manage, no extra billing – your
