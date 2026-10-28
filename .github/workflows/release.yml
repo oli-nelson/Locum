@@ -1,0 +1,177 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, e.g. 0.1.0 or 0.2.0-rc.1 (optional v prefix)'
+        required: true
+        type: string
+      expected_sha:
+        description: 'Optional source SHA guard (supplied by the local helper)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: locum-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep in sync with validate.yml.
+  RUST_TOOLCHAIN: '1.88.0'
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      source_sha: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - name: Test release automation without network publication
+        run: bash scripts/test-release.sh
+      - id: version
+        name: Validate version and prepare changelog
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_REF_TYPE" == branch ]] || { echo 'error: select a branch, not a tag'; exit 1; }
+          source scripts/release-version.sh
+          version=$(release_version "$RELEASE_VERSION")
+          [[ -z "$EXPECTED_SHA" || "$EXPECTED_SHA" == "$SOURCE_SHA" ]] || { echo 'error: source changed before dispatch'; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]]
+          [[ -z "$(git ls-remote --tags origin "refs/tags/v$version")" ]] || { echo 'error: tag exists; retry failed jobs in the same run or choose a new version'; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          mkdir -p artifacts/release-input
+          bash scripts/release-changelog.sh "$version" CHANGELOG.md > artifacts/release-input/CHANGELOG.md
+          awk -v version="$version" '
+            /^## / {
+              if (index($0, "## [" version "] - ") == 1) { found++; section = 1; next }
+              section = 0
+            }
+            section { print }
+            END { if (found != 1) exit 1 }
+          ' artifacts/release-input/CHANGELOG.md > artifacts/release-input/release-notes.md
+          grep -q '[^[:space:]]' artifacts/release-input/release-notes.md || { echo 'error: Unreleased has no entries'; exit 1; }
+          printf '\nBinaries are unsigned and macOS builds are not notarized. Linux builds are statically linked (musl). See docs/releases.md for installation notes.\n' >> artifacts/release-input/release-notes.md
+      - uses: actions/upload-artifact@v6
+        with:
+          name: locum-release-input
+          path: artifacts/release-input/*
+          if-no-files-found: error
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            platform: linux-x64
+            binary: locum
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            platform: linux-arm64
+            binary: locum
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            platform: macos-x64
+            binary: locum
+          - os: macos-15
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+            binary: locum
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x64
+            binary: locum.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          persist-credentials: false
+      - name: Install musl toolchain
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          target='${{ matrix.target }}'
+          echo "CC_${target//-/_}=musl-gcc" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - name: Set embedded release version in the build checkout only
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: bash scripts/set-release-version.sh "$RELEASE_VERSION"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --target ${{ matrix.target }} --all-features
+      - name: Build release binary (default features)
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Smoke test release binary
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          binary='target/${{ matrix.target }}/release/${{ matrix.binary }}'
+          reported=$("$binary" --version | tr -d '\r')
+          [[ $reported == "locum $RELEASE_VERSION" ]] || { echo "error: binary reports '$reported'"; exit 1; }
+          "$binary" --help > /dev/null
+          if [[ '${{ matrix.platform }}' == linux-* ]]; then
+            file "$binary"
+            file "$binary" | grep -Eq 'statically linked|static-pie linked' || { echo 'error: Linux binary is not static'; exit 1; }
+          fi
+      - name: Package release archive
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: bash scripts/package-release.sh "$RELEASE_VERSION" '${{ matrix.platform }}'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: locum-${{ matrix.platform }}
+          path: |
+            artifacts/release/*.tar.gz
+            artifacts/release/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: locum-*
+          path: artifacts/release
+          merge-multiple: true
+      - name: Finalize changelog, tag, and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+        run: bash scripts/finalize-release.sh "$RELEASE_VERSION" "$RELEASE_BRANCH" "$SOURCE_SHA" artifacts/release

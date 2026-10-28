@@ -2,6 +2,9 @@
 /target/
 Cargo.lock.bak
 
+# Release packaging
+/artifacts/
+
 # Editors / OS
 .DS_Store
 *.swp

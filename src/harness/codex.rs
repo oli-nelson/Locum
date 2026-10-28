@@ -293,13 +293,17 @@ fn isolated_codex_home() -> Result<PathBuf, HarnessError> {
     let dir = crate::config::data_dir().join("codex-home");
     std::fs::create_dir_all(&dir)
         .map_err(|e| HarnessError::unavailable(format!("create {}: {e}", dir.display())))?;
-    let link = dir.join("auth.json");
-    let target = real_home.join("auth.json");
-    if !link.exists() && target.exists() {
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&target, &link)
-            .map_err(|e| HarnessError::unavailable(format!("link auth.json: {e}")))?;
+    #[cfg(unix)]
+    {
+        let link = dir.join("auth.json");
+        let target = real_home.join("auth.json");
+        if !link.exists() && target.exists() {
+            std::os::unix::fs::symlink(&target, &link)
+                .map_err(|e| HarnessError::unavailable(format!("link auth.json: {e}")))?;
+        }
     }
+    #[cfg(not(unix))]
+    let _ = real_home;
     Ok(dir)
 }
 

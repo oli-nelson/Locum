@@ -29,8 +29,15 @@ regular one. locum holds the place of the OpenAI API for your tools.
 
 ## Install
 
-Requires Rust 1.85+ and at least one of `codex`, `claude`, `opencode` on your `PATH` (or in the
+Requires at least one of `codex`, `claude`, `opencode` on your `PATH` (or in the
 usual places: `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, …).
+
+**Prebuilt binaries** for Linux (x64, ARM64), macOS (Intel, Apple Silicon) and Windows x64 are
+attached to each [GitHub Release](https://github.com/oli-nelson/Locum/releases). Extract the
+archive and put `locum` on your `PATH`. Binaries are unsigned; on macOS run
+`xattr -d com.apple.quarantine ./locum` before first use.
+
+**From source** (Rust 1.85+):
 
 ```sh
 git clone <this repo> && cd locum
@@ -203,4 +210,5 @@ LOCUM_FAKE_HARNESS=1 locum serve # exposes a deterministic `fake` model for clie
 python3 demo/tuios_demo.py       # interactive tuios dashboard driving live requests
 ```
 
-Design notes live in [SPEC.md](SPEC.md).
+Design notes live in [SPEC.md](SPEC.md). Changes are tracked in [CHANGELOG.md](CHANGELOG.md);
+releases are cut by GitHub Actions as described in [docs/releases.md](docs/releases.md).

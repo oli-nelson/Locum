@@ -59,6 +59,12 @@ impl StderrTail {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Signal {
+    Term,
+    Kill,
+}
+
 /// Owns a child process and guarantees the whole process group is killed on drop.
 pub struct ChildGuard {
     child: Option<Child>,
@@ -113,9 +119,13 @@ impl ChildGuard {
             .map(|s| s.code().unwrap_or(-1))
     }
 
-    fn signal_group(&self, sig: i32) {
+    fn signal_group(&self, sig: Signal) {
         #[cfg(unix)]
         if let Some(pid) = self.pid {
+            let sig = match sig {
+                Signal::Term => libc::SIGTERM,
+                Signal::Kill => libc::SIGKILL,
+            };
             unsafe {
                 libc::killpg(pid as i32, sig);
             }
@@ -132,9 +142,9 @@ impl ChildGuard {
         if self.try_wait().is_some() {
             return;
         }
-        self.signal_group(libc::SIGTERM);
+        self.signal_group(Signal::Term);
         if self.wait_timeout(grace).await.is_none() {
-            self.signal_group(libc::SIGKILL);
+            self.signal_group(Signal::Kill);
             if let Some(c) = self.child.as_mut() {
                 let _ = c.kill().await;
                 let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
@@ -144,7 +154,7 @@ impl ChildGuard {
     }
 
     pub fn kill_now(&mut self) {
-        self.signal_group(libc::SIGKILL);
+        self.signal_group(Signal::Kill);
         if let Some(c) = self.child.as_mut() {
             let _ = c.start_kill();
         }
@@ -155,7 +165,7 @@ impl Drop for ChildGuard {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
             if child.try_wait().ok().flatten().is_none() {
-                self.signal_group(libc::SIGKILL);
+                self.signal_group(Signal::Kill);
                 let _ = child.start_kill();
                 // Reap asynchronously so we never leave a zombie behind.
                 tokio::spawn(async move {

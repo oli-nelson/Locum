@@ -175,7 +175,10 @@ async fn serve(cfg: Config) -> Result<()> {
                 .await?;
         }
         #[cfg(not(unix))]
-        anyhow::bail!("unix sockets are not supported on this platform");
+        anyhow::bail!(
+            "unix sockets are not supported on this platform: {}",
+            path.display()
+        );
     } else {
         let listener = tokio::net::TcpListener::bind(cfg.server.bind)
             .await
