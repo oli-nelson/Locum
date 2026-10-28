@@ -1,0 +1,75 @@
+[package]
+name = "locum"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "OpenAI-compatible HTTP server backed by locally installed agent harnesses (Codex CLI, Claude Code, OpenCode)"
+license = "MIT"
+
+[[bin]]
+name = "locum"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal", "fs", "net"] }
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+async-stream = "0.3"
+async-trait = "0.1"
+
+axum = { version = "0.8", features = ["http1", "json", "tokio", "macros"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "http1"] }
+tower = { version = "0.5", features = ["util", "limit"] }
+tower-http = { version = "0.6", features = ["cors", "limit", "trace", "request-id", "util", "set-header"] }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+toml = "0.8"
+humantime-serde = "1"
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2"] }
+
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+
+thiserror = "2"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "v7"] }
+tempfile = "3"
+dirs = "6"
+which = "7"
+subtle = "2"
+base64 = "0.22"
+rand = "0.8"
+libc = "0.2"
+blake3 = "1"
+lru = "0.12"
+parking_lot = "0.12"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+
+[features]
+default = []
+fake = []
+mimalloc = ["dep:mimalloc"]
+
+[dependencies.mimalloc]
+version = "0.1"
+optional = true
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3
+
+[profile.dev]
+opt-level = 0

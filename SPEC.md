@@ -1,6 +1,6 @@
 # Locum — Design Specification
 
-**Status:** Draft v0.1 · 2026-10-28
+**Status:** v0.1 implemented · 2026-10-28
 **CLI versions inspected:** codex-cli 0.165.0 · Claude Code 2.1.310 · opencode v2.2.0 (macOS arm64)
 
 ---
@@ -352,15 +352,17 @@ Process (one per worker, pool `min 0 / max 1` — a single server multiplexes se
 
 ```
 OPENCODE_CONFIG_CONTENT='{ "agent": { "locum": { "mode": "primary", "prompt": "<SYSTEM>", "tools": { "*": false }, "permission": { "*": "deny" } } }, "mcp": {}, "plugin": [], "share": "disabled", "autoupdate": false }'
+OPENCODE_SERVER_PASSWORD=<random>   # HTTP basic auth user `opencode`; avoids parsing the password from stderr
+OPENCODE_CONFIG_DIR=<empty dir>      # when harness.opencode.isolate_config = true
 opencode serve --hostname 127.0.0.1 --port <free port> --log-level warn
 ```
 
-cwd = scratch dir. (Exact config keys to be confirmed against the v2 config reference; the intent is a primary agent with no tools, no MCP, no plugins and no permission prompts. If per-session system prompts cannot be set through agent config at runtime, the system text goes into the transcript per §6 and the agent prompt is just the behavioural preamble.) Readiness: poll `GET /api/info` with backoff up to 15 s.
+cwd = per-worker temp dir. (Exact config keys to be confirmed against the v2 config reference; the intent is a primary agent with no tools, no MCP, no plugins and no permission prompts. If per-session system prompts cannot be set through agent config at runtime, the system text goes into the transcript per §6 and the agent prompt is just the behavioural preamble.) Readiness: poll `GET /api/info` with backoff up to 15 s.
 
 Per request (streaming):
 
 1. `POST /api/session` `{ title: "locum <req-id>" }` → `sessionID`.
-2. Open `GET /api/experimental/session/{sessionID}/log?follow=true` (SSE) *before* prompting, so no events are missed.
+2. Open `GET /api/event` (global SSE bus; filter on `data.sessionID`) *before* prompting, so no events are missed.
 3. `POST /api/session/{sessionID}/prompt` `{ text, model: {providerID, modelID, variant?}, agent: "locum" }` (model switch via `POST /api/session/{id}/model` if the prompt body doesn't accept it in the installed version).
 4. Consume SSE: `session.text.delta` → `TextDelta`; `session.reasoning.delta` → `ReasoningDelta`; `session.usage.updated` → `Usage`; `session.execution.succeeded` / `session.idle{outcome}` → `Done`; `session.execution.failed` / `session.step.failed` → `Error`; `session.permissions` / `session.tool.called` → warn (should never happen with tools denied; reply `reject` to any permission request to unblock).
 5. Cancellation → `POST /api/session/{id}/interrupt`. Cleanup → `DELETE /api/session/{id}` (fire-and-forget).
@@ -515,10 +517,10 @@ CLI: `locum serve [--bind] [--config]`, `locum doctor` (probe each harness: path
 
 ---
 
-## 15. Open questions / to verify during implementation
+## 15. Open questions — resolved during implementation
 
-1. Codex `thread/start` — confirm `ephemeral` is accepted for root threads in 0.165, and the exact config key for developer/system instructions (`developer_instructions` vs `model_instructions_file`).
-2. Claude `--setting-sources ""` semantics vs `--safe-mode`; whether `--include-partial-messages` emits `thinking_delta` for all models.
-3. OpenCode v2 config keys for a tool-less primary agent via `OPENCODE_CONFIG_CONTENT`, whether `prompt` body accepts `model`/`agent` inline, and whether `generate/text` honours the agent prompt (if not, system text is prepended for the one-shot path).
-4. Whether `max_tokens` should be a hard client-side truncation (current plan) or ignored; truncating mid-sentence may be worse for users than exceeding the limit.
-5. Reporting the *proxy* model id vs the harness-resolved model id in `model` fields — plan: echo the request's `model` for client stability, expose resolved name in `X-Locum-Resolved-Model`.
+1. Codex `thread/start` accepts `ephemeral: true` and `developerInstructions` in 0.165 (verified via the generated JSON schema and a live run); system text goes through `developerInstructions`. `-c mcp_servers={}` / `-c hooks={}` do **not** suppress user MCP servers or hooks (tables merge), so `harness.codex.isolate_home` optionally runs app-server under a private `CODEX_HOME` containing only a link to the user's `auth.json`. Off by default because a token refresh could diverge the two files.
+2. Claude: `--system-prompt-file` exists (undocumented in `--help`) and keeps the system prompt off argv. An expired OAuth session yields a `result` with `subtype: "success"` **and** `is_error: true`, with an `assistant` message whose `model` is `"<synthetic>"`; locum maps this to 503 `harness_unavailable`. Whether `thinking_delta` is emitted for all models is still unverified.
+3. OpenCode v2: `opencode serve` requires HTTP basic auth (`opencode:<password>`); `OPENCODE_SERVER_PASSWORD` sets it so locum never parses stderr. Per-session events are published on the global `GET /api/event` stream (filter on `data.sessionID`), not on `/experimental/session/{id}/log`. `OPENCODE_CONFIG_CONTENT` agent config with `prompt`, `tools: {"*": false}`, `permission: {"*": "deny"}` works; `generate/text` ignores the agent, so system text is prepended for the one-shot path. `OPENCODE_CONFIG_DIR` pointing at an empty dir removes user MCP servers/plugins while auth keeps working.
+4. `max_tokens` is implemented as a soft client-side truncation, configurable via `compat.max_tokens_truncation`.
+5. The request's `model` string is echoed in responses; the resolved `harness/model` is exposed in `X-Locum-Resolved-Model`.
