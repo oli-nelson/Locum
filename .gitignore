@@ -11,3 +11,5 @@ Cargo.lock.bak
 # Local config and scratch
 /.env
 /tmp/
+demo/.events.log
+demo/.locum_demo.rendered.tml

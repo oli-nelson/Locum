@@ -1,0 +1,68 @@
+<tml version="1" title="locum × OpenCode — live demo">
+  <state>{
+    "server": "starting", "server_state": "working", "base": "http://127.0.0.1:11435/v1",
+    "model": "opencode/openai/gpt-6.1-sol#medium",
+    "prompt": "In three short bullet points, explain what a locum tenens is.",
+    "status": "idle", "status_state": "idle",
+    "ttfb_ms": "–", "duration_ms": "–", "chunks": 0,
+    "prompt_tokens": "–", "completion_tokens": "–",
+    "request_json": "{ }",
+    "response": "_Press **Send** (or `s`) to stream a completion._",
+    "frames": "", "harness": "–", "request_id": "–", "resolved": "–", "http": "–"
+  }</state>
+  <col pad="1" gap="1">
+    <row gap="2" align="center">
+      <heading level="1">locum × OpenCode</heading>
+      <status label="{state.server}" state="{state.server_state}"/>
+      <spacer/>
+      <text role="dim">{state.base}</text>
+    </row>
+    <text role="dim">An OpenAI client → <b>locum</b> (axum, :11435) → private <b>opencode serve</b> → <c role="accent">{state.model}</c></text>
+
+    <row gap="2">
+      <stat label="Status" value="{state.status}"/>
+      <stat label="TTFB" value="{state.ttfb_ms} ms"/>
+      <stat label="Total" value="{state.duration_ms} ms"/>
+      <stat label="SSE chunks" value="{state.chunks}"/>
+      <stat label="Prompt tok" value="{state.prompt_tokens}"/>
+      <stat label="Completion tok" value="{state.completion_tokens}"/>
+    </row>
+
+    <card title="Client request">
+      <col gap="1">
+        <textarea name="prompt" label="messages[0].content (user)" bind="state.prompt" rows="3"/>
+        <row gap="2">
+          <button key="s" kind="primary" on-press="emit('send', state.prompt)">Send (streaming)</button>
+          <button key="n" on-press="emit('send_nostream', state.prompt)">Send (non-streaming)</button>
+          <button key="c" on-press="emit('clear', 1)">Clear</button>
+          <button key="q" kind="danger" on-press="close('quit')">Quit demo</button>
+        </row>
+      </col>
+    </card>
+
+    <split dir="h" ratio="0.42" grow="1">
+      <col gap="1">
+        <card title="POST {state.base}/chat/completions" grow="1">
+          <scroll follow="start"><code lang="json">{state.request_json}</code></scroll>
+        </card>
+        <card title="Response headers">
+          <kv>
+            <item k="HTTP" v="{state.http}"/>
+            <item k="x-locum-harness" v="{state.harness}"/>
+            <item k="x-locum-resolved-model" v="{state.resolved}"/>
+            <item k="x-request-id" v="{state.request_id}"/>
+          </kv>
+        </card>
+      </col>
+      <col gap="1">
+        <card title="Assembled assistant message" grow="2">
+          <scroll follow="end"><markdown>{state.response}</markdown></scroll>
+        </card>
+        <card title="Raw SSE frames (tail)" grow="1">
+          <scroll follow="end"><code>{state.frames}</code></scroll>
+        </card>
+      </col>
+    </split>
+    <text role="dim"><kbd>s</kbd> stream · <kbd>n</kbd> non-stream · <kbd>c</kbd> clear · <kbd>q</kbd> quit · the <b>locum-serve</b> pane shows the server log</text>
+  </col>
+</tml>
