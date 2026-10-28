@@ -1,0 +1,13 @@
+# Rust
+/target/
+Cargo.lock.bak
+
+# Editors / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local config and scratch
+/.env
+/tmp/
